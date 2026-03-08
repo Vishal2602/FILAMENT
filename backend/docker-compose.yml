@@ -1,0 +1,97 @@
+version: "3.9"
+
+# Filament Agent Team — Multi-Instance Local Development
+# Mirrors the Cloud Run deployment: each agent is its own container.
+#
+# Usage:
+#   docker compose up                         # all agents (remote mode)
+#   docker compose up orchestrator-local      # single instance (local mode)
+#   docker compose up --scale screen_analyst=2  # scale a specific agent
+
+x-common: &common
+  build:
+    context: .
+    dockerfile: Dockerfile
+  env_file: .env
+  restart: unless-stopped
+
+services:
+  # ── Multi-instance mode (mirrors Cloud Run) ──
+
+  orchestrator:
+    <<: *common
+    build:
+      context: .
+      args:
+        SERVICE_TARGET: orchestrator
+    container_name: filament-orchestrator
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      - SERVICE_TARGET=orchestrator
+      - AGENT_MODE=remote
+      - SCREEN_ANALYST_URL=http://screen_analyst:8080
+      - WORKSPACE_AGENT_URL=http://workspace_agent:8080
+      - NUDGE_COMPOSER_URL=http://nudge_composer:8080
+    depends_on:
+      - screen_analyst
+      - workspace_agent
+      - nudge_composer
+
+  screen_analyst:
+    <<: *common
+    build:
+      context: .
+      args:
+        SERVICE_TARGET: screen
+    container_name: filament-screen-analyst
+    ports:
+      - "8001:8080"
+    environment:
+      - PORT=8080
+      - SERVICE_TARGET=screen
+
+  workspace_agent:
+    <<: *common
+    build:
+      context: .
+      args:
+        SERVICE_TARGET: workspace
+    container_name: filament-workspace-agent
+    ports:
+      - "8002:8080"
+    environment:
+      - PORT=8080
+      - SERVICE_TARGET=workspace
+
+  nudge_composer:
+    <<: *common
+    build:
+      context: .
+      args:
+        SERVICE_TARGET: nudge
+    container_name: filament-nudge-composer
+    ports:
+      - "8003:8080"
+    environment:
+      - PORT=8080
+      - SERVICE_TARGET=nudge
+
+  # ── Single-instance mode (all agents in-process, for quick local dev) ──
+
+  orchestrator-local:
+    <<: *common
+    build:
+      context: .
+      args:
+        SERVICE_TARGET: orchestrator
+    container_name: filament-local
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      - SERVICE_TARGET=orchestrator
+      - AGENT_MODE=local
+    profiles:
+      - local

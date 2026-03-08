@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "Filament",
+  "version": "1.0.0",
+  "description": "Ambient AI workspace co-pilot powered by Gemini Live API",
+  "permissions": ["tabs", "storage", "activeTab", "scripting", "identity"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "css": ["orb.css"],
+      "run_at": "document_end"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Filament"
+  },
+  "oauth2": {
+    "client_id": "70034740406-jkmhhvp0k2ss3i974rfrn16hj8t6rmre.apps.googleusercontent.com",
+    "scopes": [
+      "https://www.googleapis.com/auth/gmail.readonly",
+      "https://www.googleapis.com/auth/drive.readonly"
+    ]
+  }
+}

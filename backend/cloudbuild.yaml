@@ -1,0 +1,170 @@
+# cloudbuild.yaml — Build and deploy all Filament agent services
+#
+# Trigger: push to main branch, or manual:
+#   gcloud builds submit . --config=cloudbuild.yaml \
+#     --project=gcloud-hackathon-9er4rb4nr0k7a
+
+substitutions:
+  _REGION: us-central1
+  _REPO: filament
+
+steps:
+  # ── Build all 4 images in parallel ──
+  - id: build-screen
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --build-arg=SERVICE_TARGET=screen
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/filament-screen-analyst:$COMMIT_SHA
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/filament-screen-analyst:latest
+      - .
+    waitFor: ["-"]
+
+  - id: build-workspace
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --build-arg=SERVICE_TARGET=workspace
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/filament-workspace-agent:$COMMIT_SHA
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/filament-workspace-agent:latest
+      - .
+    waitFor: ["-"]
+
+  - id: build-nudge
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --build-arg=SERVICE_TARGET=nudge
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/filament-nudge-composer:$COMMIT_SHA
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/filament-nudge-composer:latest
+      - .
+    waitFor: ["-"]
+
+  - id: build-orchestrator
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --build-arg=SERVICE_TARGET=orchestrator
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/filament-orchestrator:$COMMIT_SHA
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/filament-orchestrator:latest
+      - .
+    waitFor: ["-"]
+
+  # ── Push all images ──
+  - id: push-screen
+    name: gcr.io/cloud-builders/docker
+    args: [push, --all-tags, "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/filament-screen-analyst"]
+    waitFor: [build-screen]
+
+  - id: push-workspace
+    name: gcr.io/cloud-builders/docker
+    args: [push, --all-tags, "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/filament-workspace-agent"]
+    waitFor: [build-workspace]
+
+  - id: push-nudge
+    name: gcr.io/cloud-builders/docker
+    args: [push, --all-tags, "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/filament-nudge-composer"]
+    waitFor: [build-nudge]
+
+  - id: push-orchestrator
+    name: gcr.io/cloud-builders/docker
+    args: [push, --all-tags, "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/filament-orchestrator"]
+    waitFor: [build-orchestrator]
+
+  # ── Deploy specialist services first (orchestrator depends on their URLs) ──
+  - id: deploy-screen
+    name: gcr.io/cloud-builders/gcloud
+    args:
+      - run
+      - deploy
+      - filament-screen-analyst
+      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/filament-screen-analyst:$COMMIT_SHA
+      - --region=${_REGION}
+      - --platform=managed
+      - --allow-unauthenticated
+      - --port=8080
+      - --memory=1Gi
+      - --cpu=1
+      - --min-instances=1
+      - --max-instances=5
+      - --set-env-vars=SERVICE_TARGET=screen,PORT=8080,GOOGLE_API_KEY=${_GOOGLE_API_KEY},GOOGLE_GENAI_USE_VERTEXAI=FALSE
+    waitFor: [push-screen]
+
+  - id: deploy-workspace
+    name: gcr.io/cloud-builders/gcloud
+    args:
+      - run
+      - deploy
+      - filament-workspace-agent
+      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/filament-workspace-agent:$COMMIT_SHA
+      - --region=${_REGION}
+      - --platform=managed
+      - --allow-unauthenticated
+      - --port=8080
+      - --memory=1Gi
+      - --cpu=1
+      - --min-instances=1
+      - --max-instances=5
+      - --set-env-vars=SERVICE_TARGET=workspace,PORT=8080,GOOGLE_API_KEY=${_GOOGLE_API_KEY},GOOGLE_GENAI_USE_VERTEXAI=FALSE
+    waitFor: [push-workspace]
+
+  - id: deploy-nudge
+    name: gcr.io/cloud-builders/gcloud
+    args:
+      - run
+      - deploy
+      - filament-nudge-composer
+      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/filament-nudge-composer:$COMMIT_SHA
+      - --region=${_REGION}
+      - --platform=managed
+      - --allow-unauthenticated
+      - --port=8080
+      - --memory=2Gi
+      - --cpu=2
+      - --min-instances=1
+      - --max-instances=5
+      - --set-env-vars=SERVICE_TARGET=nudge,PORT=8080,GOOGLE_API_KEY=${_GOOGLE_API_KEY},GOOGLE_GENAI_USE_VERTEXAI=FALSE
+    waitFor: [push-nudge]
+
+  # ── Get service URLs, then deploy orchestrator ──
+  - id: deploy-orchestrator
+    name: gcr.io/cloud-builders/gcloud
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        SCREEN_URL=$$(gcloud run services describe filament-screen-analyst --region=${_REGION} --format="value(status.url)")
+        WORKSPACE_URL=$$(gcloud run services describe filament-workspace-agent --region=${_REGION} --format="value(status.url)")
+        NUDGE_URL=$$(gcloud run services describe filament-nudge-composer --region=${_REGION} --format="value(status.url)")
+
+        gcloud run deploy filament-orchestrator \
+          --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/filament-orchestrator:$COMMIT_SHA \
+          --region=${_REGION} \
+          --platform=managed \
+          --allow-unauthenticated \
+          --port=8080 \
+          --memory=1Gi \
+          --cpu=1 \
+          --min-instances=1 \
+          --max-instances=10 \
+          --timeout=300 \
+          --set-env-vars="SERVICE_TARGET=orchestrator,PORT=8080,AGENT_MODE=remote,GOOGLE_API_KEY=${_GOOGLE_API_KEY},GOOGLE_GENAI_USE_VERTEXAI=FALSE,SCREEN_ANALYST_URL=$$SCREEN_URL,WORKSPACE_AGENT_URL=$$WORKSPACE_URL,NUDGE_COMPOSER_URL=$$NUDGE_URL"
+    waitFor: [push-orchestrator, deploy-screen, deploy-workspace, deploy-nudge]
+
+images:
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/filament-screen-analyst
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/filament-workspace-agent
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/filament-nudge-composer
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/filament-orchestrator
+
+timeout: 1800s
+options:
+  logging: CLOUD_LOGGING_ONLY
