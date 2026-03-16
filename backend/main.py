@@ -206,18 +206,18 @@ async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     logger.info(f"WebSocket accepted (mode={AGENT_MODE})")
 
-    # Auth token holder — can be updated at any time during the session
+    # Wait for auth token before doing anything — guaranteed no race condition
     token_holder = {"token": None}
-
-    # Try to receive auth as first message, but don't block long
     try:
-        first_msg = await asyncio.wait_for(websocket.receive_text(), timeout=2.0)
-        data = json.loads(first_msg)
+        auth_msg = await asyncio.wait_for(websocket.receive_text(), timeout=10.0)
+        data = json.loads(auth_msg)
         if data.get("type") == "auth":
             token_holder["token"] = data.get("token")
-            logger.info(f"Auth token received (immediate): {'yes' if token_holder['token'] else 'none'}")
+            logger.info(f"Auth token received: {'yes' if token_holder['token'] else 'none (not signed in)'}")
+        else:
+            logger.warning(f"Expected auth message, got type={data.get('type')} — proceeding without token")
     except asyncio.TimeoutError:
-        logger.info("No immediate auth message, will accept later")
+        logger.warning("No auth message received within 10s — proceeding without token")
     except Exception as e:
         logger.warning(f"Auth parse error: {e}")
 
@@ -266,8 +266,8 @@ async def _remote_ws_handler(websocket: WebSocket, session_id: str, token_holder
 async def _local_ws_handler(websocket: WebSocket, session_id: str, token_holder: dict):
     """Handle WebSocket in local mode — direct Gemini Live API (no ADK).
 
-    Bypasses ADK's run_live() which has a Pydantic serialization bug in v1.26.0.
-    Uses google.genai Live API directly — confirmed working.
+    Restarts the Gemini Live session automatically when it closes, keeping
+    the user's WebSocket connection alive for multi-turn conversations.
     """
     config = types.LiveConnectConfig(
         response_modalities=["AUDIO"],
@@ -277,12 +277,18 @@ async def _local_ws_handler(websocket: WebSocket, session_id: str, token_holder:
         tools=[WORKSPACE_TOOL_DECL],
     )
 
-    try:
-        async with genai_client.aio.live.connect(
-            model=LIVE_MODEL,
-            config=config,
-        ) as live_session:
-            logger.info(f"Gemini Live session connected (session={session_id})")
+    gemini_session_num = 0
+    while True:
+        gemini_session_num += 1
+        logger.info(f"Starting Gemini Live session #{gemini_session_num} (ws={session_id})")
+        user_disconnected = False
+
+        try:
+            async with genai_client.aio.live.connect(
+                model=LIVE_MODEL,
+                config=config,
+            ) as live_session:
+                logger.info(f"Gemini Live session #{gemini_session_num} connected")
 
             async def ws_to_gemini():
                 """Forward frames and audio from WebSocket to Gemini Live session."""
@@ -369,6 +375,7 @@ async def _local_ws_handler(websocket: WebSocket, session_id: str, token_holder:
 
                 except WebSocketDisconnect:
                     logger.info(f"Client disconnected (sent {frame_count} frames, {audio_count} audio)")
+                    user_disconnected = True
                 except Exception as e:
                     logger.error(f"ws_to_gemini error: {e}", exc_info=True)
 
@@ -452,11 +459,13 @@ async def _local_ws_handler(websocket: WebSocket, session_id: str, token_holder:
                                             "type": "text",
                                             "content": f"Found {n_emails} email(s) and {n_files} file(s). Processing...",
                                         }))
-                                    elif result.get("source") == "none":
+                                    elif result.get("source") == "no_token":
                                         await websocket.send_text(json.dumps({
                                             "type": "text",
-                                            "content": "No OAuth token — can't access your email. Check extension permissions.",
+                                            "content": "Not signed in to Google — open the Filament popup and sign in first.",
                                         }))
+                                    elif result.get("source") == "no_results":
+                                        pass  # No results is normal — let Gemini say so naturally
                                     fn_responses.append(types.FunctionResponse(
                                         id=fc.id,
                                         name=fc.name,
@@ -483,19 +492,23 @@ async def _local_ws_handler(websocket: WebSocket, session_id: str, token_holder:
                 asyncio.create_task(gemini_to_ws()),
             ]
             done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-
             for task in pending:
                 task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):
+                    pass
 
-    except Exception as e:
-        logger.error(f"Gemini Live session error: {e}", exc_info=True)
-        try:
-            await websocket.send_text(json.dumps({
-                "type": "text",
-                "content": f"Connection error: {e}",
-            }))
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error(f"Gemini Live session #{gemini_session_num} error: {e}", exc_info=True)
+
+        if user_disconnected:
+            logger.info(f"User disconnected — ending WebSocket session (ws={session_id})")
+            break
+
+        # Gemini session closed on its own — restart it
+        logger.info(f"Gemini session #{gemini_session_num} ended — restarting in 1s...")
+        await asyncio.sleep(1)
 
     logger.info(f"WebSocket session ended (session={session_id})")
 

@@ -82,9 +82,9 @@ def _search_gmail(service, query: str, max_results: int = 5) -> list[dict]:
                 "date": headers.get("Date", ""),
             })
     except HttpError as e:
-        logger.warning(f"Gmail API error: {e}")
+        logger.error(f"Gmail API error (status={e.status_code}, query='{query}'): {e}")
     except Exception as e:
-        logger.warning(f"Gmail search failed: {e}")
+        logger.error(f"Gmail search failed (query='{query}'): {e}")
     return results
 
 
@@ -131,7 +131,7 @@ def fetch_workspace_context(query: str, source: str = "both", tool_context=None)
 
     if not oauth_token:
         logger.info("No OAuth token — returning empty result")
-        return NO_DATA
+        return {**NO_DATA, "source": "no_token"}
 
     gmail_svc = _build_gmail_service(oauth_token)
     drive_svc = _build_drive_service(oauth_token)
@@ -144,7 +144,7 @@ def fetch_workspace_context(query: str, source: str = "both", tool_context=None)
 
     if not emails and not files:
         logger.info("No results from Gmail/Drive — returning empty result")
-        return NO_DATA
+        return {**NO_DATA, "source": "no_results"}
 
     # Extract key facts from the results — prefer body over snippet
     key_facts = []
