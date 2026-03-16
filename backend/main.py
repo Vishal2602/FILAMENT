@@ -337,7 +337,8 @@ async def _local_ws_handler(websocket: WebSocket, session_id: str, token_holder:
                                         logger.info(f"Frame #{frame_count} sent to Gemini ({len(frame_data)} chars)")
 
                                     # Every 3rd frame (~9s), send a text nudge to trigger proactive analysis
-                                    if frame_count % 3 == 0:
+                                    # Only if we have an OAuth token — avoids "No OAuth token" spam on first connect
+                                    if frame_count % 3 == 0 and token_holder["token"]:
                                         await live_session.send_client_content(
                                             turns=types.Content(
                                                 role="user",

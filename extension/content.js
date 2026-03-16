@@ -554,8 +554,16 @@ function playAudioPCM(arrayBuffer) {
 // ══════════════════════════════════════════════════════════════════════════════
 // WEBSOCKET
 // ══════════════════════════════════════════════════════════════════════════════
-function connectWebSocket() {
+async function connectWebSocket() {
   if (ws && ws.readyState === WebSocket.OPEN) return;
+
+  // Pre-fetch token BEFORE opening the socket so it can be sent as the very first message
+  let pendingToken = null;
+  try {
+    pendingToken = await new Promise(resolve =>
+      chrome.storage.local.get(['filament_oauth_token'], r => resolve(r.filament_oauth_token || null))
+    );
+  } catch (e) {}
 
   ws = new WebSocket(wsUrl);
   ws.binaryType = 'arraybuffer';
@@ -565,19 +573,13 @@ function connectWebSocket() {
     setConnectionDot('connected');
     if (currentState === 'connecting' || currentState === 'error') setState('listening');
 
-    // Read OAuth token directly from chrome.storage.local (set by popup.js sign-in)
+    // Send token synchronously — guaranteed to be first message, no async race condition
     try {
-      chrome.storage.local.get(['filament_oauth_token'], (result) => {
-        if (chrome.runtime.lastError) return;
-        const token = result.filament_oauth_token || null;
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: 'auth', token }));
-          console.log('[Filament] Auth token sent:', token ? 'yes (' + token.substring(0, 10) + '...)' : 'NONE');
-          if (!token) {
-            addMessage('Sign in to Google via the Filament extension popup first.', 'error');
-          }
-        }
-      });
+      ws.send(JSON.stringify({ type: 'auth', token: pendingToken }));
+      console.log('[Filament] Auth token sent:', pendingToken ? 'yes (' + pendingToken.substring(0, 10) + '...)' : 'NONE');
+      if (!pendingToken) {
+        addMessage('Sign in to Google via the Filament extension popup first.', 'error');
+      }
     } catch (e) {
       console.warn('[Filament] Extension context invalidated — reload the page to reconnect.');
     }
