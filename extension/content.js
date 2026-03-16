@@ -580,16 +580,21 @@ function connectWebSocket() {
     if (currentState === 'connecting' || currentState === 'error') setState('listening');
 
     // Read OAuth token directly from chrome.storage.local (set by popup.js sign-in)
-    chrome.storage.local.get(['filament_oauth_token'], (result) => {
-      const token = result.filament_oauth_token || null;
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: 'auth', token }));
-        console.log('[Filament] Auth token sent:', token ? 'yes (' + token.substring(0, 10) + '...)' : 'NONE');
-        if (!token) {
-          addMessage('Sign in to Google via the Filament extension popup first.', 'error');
+    try {
+      chrome.storage.local.get(['filament_oauth_token'], (result) => {
+        if (chrome.runtime.lastError) return;
+        const token = result.filament_oauth_token || null;
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'auth', token }));
+          console.log('[Filament] Auth token sent:', token ? 'yes (' + token.substring(0, 10) + '...)' : 'NONE');
+          if (!token) {
+            addMessage('Sign in to Google via the Filament extension popup first.', 'error');
+          }
         }
-      }
-    });
+      });
+    } catch (e) {
+      console.warn('[Filament] Extension context invalidated — reload the page to reconnect.');
+    }
   };
 
   ws.onmessage = (event) => {
@@ -668,12 +673,16 @@ chrome.runtime.onMessage.addListener((msg) => {
 
 // ── Auto-send token when user signs in via popup ────────────────────────────
 chrome.storage.onChanged.addListener((changes) => {
-  if (changes.filament_oauth_token && changes.filament_oauth_token.newValue) {
-    const token = changes.filament_oauth_token.newValue;
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: 'auth', token }));
-      console.log('[Filament] Auth token updated from popup sign-in');
+  try {
+    if (changes.filament_oauth_token && changes.filament_oauth_token.newValue) {
+      const token = changes.filament_oauth_token.newValue;
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'auth', token }));
+        console.log('[Filament] Auth token updated from popup sign-in');
+      }
     }
+  } catch (e) {
+    // Extension context invalidated — ignore
   }
 });
 

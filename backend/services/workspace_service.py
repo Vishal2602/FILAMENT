@@ -23,6 +23,7 @@ from google.adk.sessions import InMemorySessionService
 from google.genai import types
 
 from agents.workspace_agent import workspace_agent
+from tools import fetch_workspace_context
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -42,6 +43,7 @@ runner = Runner(
 class ContextRequest(BaseModel):
     query: str
     session_id: str = "default"
+    oauth_token: str = ""
 
 
 class EmailSummary(BaseModel):
@@ -71,55 +73,40 @@ async def health():
     return {"status": "workspace_context running", "agent": "workspace_context"}
 
 
+class _ToolCtx:
+    def __init__(self, token):
+        self.state = {"oauth_token": token}
+
+
 @app.post("/context", response_model=ContextResponse)
 async def get_context(req: ContextRequest):
-    """Fetch workspace context for a given query."""
-    session = await session_service.create_session(
-        app_name=APP_NAME,
-        user_id="service_user",
-        session_id=req.session_id,
+    """Fetch workspace context for a given query using the user's OAuth token."""
+    if not req.oauth_token:
+        logger.warning("No oauth_token in request — cannot fetch Gmail/Drive")
+        return ContextResponse(has_context=False)
+
+    result = fetch_workspace_context(
+        query=req.query,
+        source="both",
+        tool_context=_ToolCtx(req.oauth_token),
     )
 
-    content = types.Content(
-        role="user",
-        parts=[types.Part(text=f"Find workspace context for: {req.query}")],
+    has_context = result.get("source") == "live" and (result.get("emails") or result.get("files"))
+    return ContextResponse(
+        has_context=bool(has_context),
+        emails=[EmailSummary(
+            sender=e.get("from", ""),
+            subject=e.get("subject", ""),
+            snippet=e.get("snippet", ""),
+            date=e.get("date", ""),
+        ) for e in result.get("emails", [])],
+        files=[FileSummary(
+            name=f.get("name", ""),
+            last_edited=f.get("last_edited", ""),
+            link=f.get("link", ""),
+        ) for f in result.get("files", [])],
+        key_facts=result.get("key_facts", []),
     )
-
-    raw_text = ""
-    async for event in runner.run(
-        user_id="service_user",
-        session_id=req.session_id,
-        new_message=content,
-    ):
-        if event.content and event.content.parts:
-            for part in event.content.parts:
-                if part.text:
-                    raw_text += part.text
-
-    try:
-        result = json.loads(raw_text.strip().strip("```json").strip("```").strip())
-        return ContextResponse(
-            has_context=result.get("has_context", False),
-            emails=[EmailSummary(
-                sender=e.get("from", ""),
-                subject=e.get("subject", ""),
-                snippet=e.get("snippet", ""),
-                date=e.get("date", ""),
-            ) for e in result.get("emails", [])],
-            files=[FileSummary(
-                name=f.get("name", ""),
-                last_edited=f.get("last_edited", ""),
-                link=f.get("link", ""),
-            ) for f in result.get("files", [])],
-            key_facts=result.get("key_facts", []),
-            suggested_nudge_topic=result.get("suggested_nudge_topic", ""),
-            raw_text=raw_text,
-        )
-    except (json.JSONDecodeError, AttributeError):
-        return ContextResponse(
-            has_context=False,
-            raw_text=raw_text,
-        )
 
 
 if __name__ == "__main__":

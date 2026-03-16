@@ -139,13 +139,13 @@ async def _call_screen_analyst(frame_b64: str, session_id: str) -> dict:
         return resp.json()
 
 
-async def _call_workspace_agent(query: str, session_id: str) -> dict:
+async def _call_workspace_agent(query: str, session_id: str, oauth_token: str | None = None) -> dict:
     import httpx
     headers = _auth_headers(WORKSPACE_AGENT_URL)
     async with httpx.AsyncClient(timeout=10.0) as client:
         resp = await client.post(
             f"{WORKSPACE_AGENT_URL}/context",
-            json={"query": query, "session_id": session_id},
+            json={"query": query, "session_id": session_id, "oauth_token": oauth_token or ""},
             headers=headers,
         )
         resp.raise_for_status()
@@ -169,7 +169,7 @@ async def _call_nudge_composer(screen_analysis: dict, workspace_context: dict, s
         return resp.json()
 
 
-async def _remote_pipeline(frame_b64: str, session_id: str, websocket: WebSocket):
+async def _remote_pipeline(frame_b64: str, session_id: str, websocket: WebSocket, oauth_token: str | None = None):
     try:
         analysis = await _call_screen_analyst(frame_b64, session_id)
         logger.info(f"Screen: pattern={analysis.get('pattern')}, confidence={analysis.get('confidence')}")
@@ -181,7 +181,7 @@ async def _remote_pipeline(frame_b64: str, session_id: str, websocket: WebSocket
         if not context_query:
             return
 
-        workspace_ctx = await _call_workspace_agent(context_query, session_id)
+        workspace_ctx = await _call_workspace_agent(context_query, session_id, oauth_token)
         logger.info(f"Workspace: has_context={workspace_ctx.get('has_context')}")
 
         if not workspace_ctx.get("has_context"):
@@ -224,12 +224,12 @@ async def websocket_endpoint(websocket: WebSocket):
     session_id = f"session_{id(websocket)}"
 
     if AGENT_MODE == "remote":
-        await _remote_ws_handler(websocket, session_id)
+        await _remote_ws_handler(websocket, session_id, token_holder)
     else:
         await _local_ws_handler(websocket, session_id, token_holder)
 
 
-async def _remote_ws_handler(websocket: WebSocket, session_id: str):
+async def _remote_ws_handler(websocket: WebSocket, session_id: str, token_holder: dict):
     """Handle WebSocket in remote mode — fan out to agent services via HTTP."""
     try:
         while True:
@@ -239,10 +239,15 @@ async def _remote_ws_handler(websocket: WebSocket, session_id: str):
                 data = json.loads(message["text"])
                 msg_type = data.get("type")
 
+                if msg_type == "auth":
+                    token_holder["token"] = data.get("token")
+                    logger.info(f"Remote: auth token updated: {'yes' if token_holder['token'] else 'none'}")
+                    continue
+
                 if msg_type == "frame":
                     frame_b64 = data.get("data", "")
                     asyncio.create_task(
-                        _remote_pipeline(frame_b64, session_id, websocket)
+                        _remote_pipeline(frame_b64, session_id, websocket, token_holder["token"])
                     )
 
                 elif msg_type == "audio":

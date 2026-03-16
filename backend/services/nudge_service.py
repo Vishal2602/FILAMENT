@@ -62,11 +62,18 @@ async def health():
 @app.post("/compose", response_model=NudgeResponse)
 async def compose_nudge(req: NudgeRequest):
     """Compose a text nudge from screen analysis and workspace context."""
-    session = await session_service.create_session(
-        app_name=APP_NAME,
-        user_id="service_user",
-        session_id=req.session_id,
-    )
+    try:
+        session = await session_service.create_session(
+            app_name=APP_NAME,
+            user_id="service_user",
+            session_id=req.session_id,
+        )
+    except Exception:
+        session = await session_service.get_session(
+            app_name=APP_NAME,
+            user_id="service_user",
+            session_id=req.session_id,
+        )
 
     prompt = (
         f"Screen Analysis:\n{json.dumps(req.screen_analysis, indent=2)}\n\n"

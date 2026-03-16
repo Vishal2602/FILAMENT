@@ -63,11 +63,18 @@ async def health():
 @app.post("/analyze", response_model=AnalysisResponse)
 async def analyze_frame(req: FrameRequest):
     """Analyze a single screen frame and return structured observations."""
-    session = await session_service.create_session(
-        app_name=APP_NAME,
-        user_id="service_user",
-        session_id=req.session_id,
-    )
+    try:
+        session = await session_service.create_session(
+            app_name=APP_NAME,
+            user_id="service_user",
+            session_id=req.session_id,
+        )
+    except Exception:
+        session = await session_service.get_session(
+            app_name=APP_NAME,
+            user_id="service_user",
+            session_id=req.session_id,
+        )
 
     frame_bytes = base64.b64decode(req.frame_b64)
 
