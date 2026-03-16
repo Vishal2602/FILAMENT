@@ -51,7 +51,7 @@ Built for the **Build With AI NYC Hackathon 2026** — Live Agent Category.
 1. **You click the floating orb** on any webpage
 2. Filament starts capturing your screen (1 frame/3s) and microphone
 3. Frames and audio stream to the backend over WebSocket
-4. The backend pipes everything into the **Gemini Live API** (`gemini-2.5-flash-native-audio-latest`)
+4. The backend feeds everything into the **ADK Runner** → **Gemini Live API** (`gemini-2.5-flash-native-audio-latest`)
 5. When the model spots something actionable, it calls `fetch_workspace_context` to search your **Gmail and Google Drive**
 6. It **speaks a short nudge** back to you — audio played directly in your browser
 7. You can also **talk to it** naturally and it responds with voice
@@ -106,9 +106,10 @@ Filament speaks the answer directly
 | Audio Capture | `getUserMedia()` → AudioWorklet → PCM Int16 16kHz |
 | Transport | WebSocket (bidirectional, persistent) |
 | Backend | FastAPI (Python 3.11) on Google Cloud Run |
+| Agent Framework | Google ADK (`Runner` + `run_live()` + `LiveRequestQueue`) |
 | AI Model | `gemini-2.5-flash-native-audio-latest` via Gemini Live API |
 | Workspace Data | Gmail API + Drive API via OAuth 2.0 |
-| Voice Output | Web Audio API, PCM 24kHz sequential playback |
+| Voice Output | Web Audio API, PCM sequential playback |
 | Deployment | Google Cloud Run, us-central1 |
 
 ---
@@ -126,7 +127,7 @@ filament/
 │   ├── popup.html / popup.js    ← settings (backend URL config)
 │   └── orb.css                  ← floating orb + panel styles
 ├── backend/                     ← FastAPI Python backend
-│   ├── main.py                  ← WebSocket handler, Gemini Live session
+│   ├── main.py                  ← WebSocket handler, ADK Runner + run_live()
 │   ├── tools.py                 ← fetch_workspace_context (Gmail + Drive)
 │   ├── agents/
 │   │   └── live_agent.py        ← system prompt for the Gemini model
@@ -210,13 +211,15 @@ The backend starts on `http://localhost:8080`.
 Filament supports two execution modes:
 
 ### Local Mode (Default)
-Single process — the backend opens one Gemini Live session that handles everything:
-screen analysis, workspace lookup, and spoken nudge generation.
+Single process — the ADK Runner opens one Gemini Live session that handles everything:
+screen analysis, workspace lookup, and spoken nudge generation. ADK automatically
+executes tool calls (`fetch_workspace_context`) using the OAuth token from session state.
 
 ```
-Extension ←→ WebSocket ←→ main.py ←→ Gemini Live API
-                                          ↕
-                                   fetch_workspace_context()
+Extension ←→ WebSocket ←→ main.py ←→ ADK Runner ←→ Gemini Live API
+                           LiveRequestQueue              ↕
+                                               fetch_workspace_context()
+                                               (Gmail API + Drive API)
 ```
 
 ### Remote Mode (Cloud Run)

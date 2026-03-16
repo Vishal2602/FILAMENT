@@ -14,12 +14,16 @@ Chrome Extension (content.js)
   ├── Audio capture: getUserMedia() → AudioWorklet (worklet-processor.js) → PCM Int16 16kHz
   └── WebSocket → backend /ws
 
-FastAPI Backend (main.py)
-  ├── AGENT_MODE=local  → single Gemini Live session handles everything (CURRENT MODE on Cloud Run)
-  └── AGENT_MODE=remote → 4 Cloud Run microservices (orchestrator routes to others via HTTP)
+FastAPI Backend (main.py) — AGENT_MODE=local (Cloud Run)
+  ├── ADK Runner (google-adk) with live_agent (LlmAgent)
+  │     ├── runner.run_live() ← ADK manages Gemini Live session
+  │     ├── LiveRequestQueue ← receives frames + audio from WebSocket
+  │     └── ADK auto-executes FunctionTool calls (fetch_workspace_context)
+  └── AGENT_MODE=remote → 4 Cloud Run microservices (deployed but not used in local mode)
 
 Gemini Live API (gemini-2.5-flash-native-audio-latest)
   └── Tool: fetch_workspace_context(query, source) → Gmail API + Drive API
+       └── OAuth token injected via ADK session state (tool_context.state["oauth_token"])
 ```
 
 ## Key Files
@@ -28,12 +32,12 @@ Gemini Live API (gemini-2.5-flash-native-audio-latest)
 - `extension/popup.js` / `popup.html` — settings panel, sign-in button
 - `extension/manifest.json` — OAuth client ID, web_accessible_resources
 - `extension/worklet-processor.js` — AudioWorklet PCM processor (separate file to bypass Gmail CSP)
-- `backend/main.py` — WebSocket handler, Gemini Live session, tool calling
-- `backend/tools.py` — `fetch_workspace_context` (Gmail + Drive)
-- `backend/agents/live_agent.py` — system prompt for Gemini Live (local mode)
-- `backend/services/screen_service.py` — screen analyst microservice (remote mode)
-- `backend/services/workspace_service.py` — workspace context microservice (remote mode)
-- `backend/services/nudge_service.py` — nudge composer microservice (remote mode)
+- `backend/main.py` — WebSocket handler, ADK Runner + run_live(), LiveRequestQueue
+- `backend/tools.py` — `fetch_workspace_context` (Gmail + Drive) as ADK FunctionTool
+- `backend/agents/live_agent.py` — LlmAgent definition (model, system prompt, FunctionTool) used by ADK Runner
+- `backend/services/screen_service.py` — screen analyst microservice (remote mode only)
+- `backend/services/workspace_service.py` — workspace context microservice (remote mode only)
+- `backend/services/nudge_service.py` — nudge composer microservice (remote mode only)
 - `backend/deploy.sh` — Cloud Run deployment script
 - `backend/entrypoint.sh` — routes Docker container to correct service based on SERVICE_TARGET env var
 
@@ -111,6 +115,9 @@ gcloud run services update filament-orchestrator \
 - Gemini 2.5 thinking/reasoning leaking into text output — filtered with `getattr(part, 'thought', False)`
 - Drive search only searched file content — now also searches by filename (`name contains`)
 - `AGENT_MODE=remote` on orchestrator silently dropped all audio — switched to `AGENT_MODE=local`
+- Gemini Live session closing after first response — added restart loop in `_local_ws_handler`
+- `tasks = [...]` indentation bug — was inside `gemini_to_ws()` so `ws_to_gemini` never ran as a parallel task
+- Migrated `main.py` from raw `genai_client.aio.live.connect()` to ADK `Runner.run_live()` — ADK now handles tool execution automatically; OAuth token stored in ADK session state
 
 ## Known Issues & Decisions
 - **Always use `/opt/homebrew/bin/bash deploy.sh`** — macOS ships with bash 3.2, deploy.sh uses bash 4+ associative arrays
@@ -120,6 +127,9 @@ gcloud run services update filament-orchestrator \
 - Gmail search operators work in the query: `in:sent`, `in:inbox`, `newer_than:1d`, `from:name`, `subject:keyword`
 - Do NOT add hardcoded names/values (Sarah, NYC, tax rate) to system prompts — biases the model
 - Extension loads `worklet-processor.js` via `chrome.runtime.getURL()` to bypass site CSP restrictions
+- ADK `Runner` and `InMemorySessionService` are created at module level (not per-request) — sessions are stored per `session_id`
+- `fetch_workspace_context` receives ADK `ToolContext` as `tool_context` param — ADK injects it automatically because the parameter is named `tool_context`
+- Gemini Live sessions have a ~10 min timeout — the restart loop in `_local_ws_handler` handles reconnection transparently
 
 ## WebSocket URLs
 - Local dev: `ws://localhost:8080/ws`
