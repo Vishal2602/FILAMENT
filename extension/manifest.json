@@ -20,6 +20,12 @@
     "default_popup": "popup.html",
     "default_title": "Filament"
   },
+  "web_accessible_resources": [
+    {
+      "resources": ["worklet-processor.js"],
+      "matches": ["<all_urls>"]
+    }
+  ],
   "oauth2": {
     "client_id": "76839905027-9mruei1o58bfots328vsp8a8k5l1suik.apps.googleusercontent.com",
     "scopes": [

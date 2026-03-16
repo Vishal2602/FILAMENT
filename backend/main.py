@@ -401,6 +401,9 @@ async def _local_ws_handler(websocket: WebSocket, session_id: str, token_holder:
                             model_turn = response.server_content.model_turn
                             if model_turn and model_turn.parts:
                                 for part in model_turn.parts:
+                                    # Skip internal thinking/reasoning parts (Gemini 2.5 thinking feature)
+                                    if getattr(part, 'thought', False):
+                                        continue
                                     if part.inline_data and part.inline_data.mime_type.startswith("audio/"):
                                         await websocket.send_bytes(part.inline_data.data)
                                     elif part.text:

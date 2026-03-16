@@ -92,10 +92,13 @@ def _search_drive(service, query: str, max_results: int = 3) -> list[dict]:
     """Search Drive and return file summaries."""
     results = []
     try:
+        safe_q = query.replace("'", "\\'")
+        drive_query = f"name contains '{safe_q}' or fullText contains '{safe_q}'"
         resp = service.files().list(
-            q=f"fullText contains '{query}'",
+            q=drive_query,
             pageSize=max_results,
             fields="files(id, name, modifiedTime, webViewLink)",
+            orderBy="modifiedTime desc",
         ).execute()
 
         for f in resp.get("files", []):
@@ -105,9 +108,9 @@ def _search_drive(service, query: str, max_results: int = 3) -> list[dict]:
                 "link": f.get("webViewLink", ""),
             })
     except HttpError as e:
-        logger.warning(f"Drive API error: {e}")
+        logger.error(f"Drive API error (status={e.status_code}): {e}")
     except Exception as e:
-        logger.warning(f"Drive search failed: {e}")
+        logger.error(f"Drive search failed: {e}")
     return results
 
 

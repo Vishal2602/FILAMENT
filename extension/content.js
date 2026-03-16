@@ -475,23 +475,9 @@ async function startMicrophone() {
 
   audioCtxIn = new AudioContext({ sampleRate: AUDIO_SAMPLE_RATE });
 
-  // Register AudioWorklet processor via inline Blob (replaces deprecated ScriptProcessorNode)
-  const workletCode = `
-    class PcmCaptureProcessor extends AudioWorkletProcessor {
-      process(inputs) {
-        const input = inputs[0];
-        if (input && input[0] && input[0].length > 0) {
-          this.port.postMessage(input[0]);
-        }
-        return true;
-      }
-    }
-    registerProcessor('pcm-capture', PcmCaptureProcessor);
-  `;
-  const blob = new Blob([workletCode], { type: 'application/javascript' });
-  const workletUrl = URL.createObjectURL(blob);
+  // Load AudioWorklet processor from extension file (avoids CSP blob: issues on sites like Gmail)
+  const workletUrl = chrome.runtime.getURL('worklet-processor.js');
   await audioCtxIn.audioWorklet.addModule(workletUrl);
-  URL.revokeObjectURL(workletUrl);
 
   const source = audioCtxIn.createMediaStreamSource(micStream);
   workletNode = new AudioWorkletNode(audioCtxIn, 'pcm-capture');
